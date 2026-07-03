@@ -182,9 +182,9 @@ function ValidationStamp({ by, at }) {
   );
 }
 
-function Badge({ icon: Icon, label, color, dim, type, tier, onClick }) {
+function Badge({ icon: Icon, label, color, dim, type, tier, onClick, titleText }) {
   return (
-    <button onClick={onClick} className="flex flex-col items-center gap-1 text-center" title="Voir la condition" style={{ width: 76, opacity: dim ? 0.45 : 1, cursor: "pointer", background: "none", border: "none", padding: 0 }}>
+    <button onClick={onClick} className="flex flex-col items-center gap-1 text-center" title={titleText || "Voir la condition"} style={{ width: 76, opacity: dim ? 0.45 : 1, cursor: "pointer", background: "none", border: "none", padding: 0 }}>
       <div className="flex items-center justify-center rounded-full" style={{ width: 46, height: 46, background: dim ? C.line : color, color: dim ? C.muted : "#fff" }}>
         <Icon size={22} />
       </div>
@@ -245,6 +245,70 @@ function Field({ label, value, onChange, placeholder, disabled }) {
 }
 
 /* ============================ APPLICATION ============================ */
+/* Calcul des badges d'une troupe (utilisé par le livret ET le tableau de bord). */
+function computeBadges(data) {
+    const S = (id) => data.sessions[id];
+    const figOk = (f) => f.validated && f.rules.every(Boolean);
+    const allFigs = FIG_SESSIONS.flatMap((s) => S(s.id).figures);
+    const vCount = allFigs.filter(figOk).length;
+    const hasD = allFigs.some((f) => f.level === "D" && figOk(f));
+    const diffPoints = FIG_SESSIONS.reduce((a, s) => a + sessionScore(S(s.id), s.bareme).figs, 0);
+    const duos = sessionValidatedCount(S(1)) + sessionValidatedCount(S(2));
+    const trios = sessionValidatedCount(S(3)) + sessionValidatedCount(S(4));
+    const quat = sessionValidatedCount(S(5)) + sessionValidatedCount(S(6));
+    const famCount = new Set(allFigs.filter(figOk).map((f) => f.family)).size;
+    const dIn = (ids) => ids.some((id) => S(id).figures.some((f) => f.level === "D" && figOk(f)));
+    const diffMax = dIn([1, 2]) && dIn([3, 4]) && dIn([5, 6]);
+    const conc = FIG_SESSIONS.reduce((a, s) => a + (S(s.id).concentration || 0), 0);
+    const ch = data.choreo;
+    const chosen = ch.figures.filter((f) => f.repA).length;
+    const choreoDiff = Math.round(ch.figures.reduce((a, f) => a + (BAREME_CHOREO[f.level] || 0), 0) * 100) / 100;
+    const dynamics = ch.figures.filter((f) => f.dynamic).length + ch.liaisons.filter((l) => l.dynamic).length;
+    const liaisons = ch.liaisons.filter((l) => l.desc && l.desc.trim()).length;
+    const espace = ch.espace.filter(Boolean).length;
+    const fullChoreo = !!(ch.entree && ch.entree.trim()) && !!(ch.sortie && ch.sortie.trim()) && chosen >= 7;
+    const carton = FIG_SESSIONS.some((s) => sessionValidatedCount(S(s.id)) === 8);
+    const parfaite = FIG_SESSIONS.some((s) => sessionScore(S(s.id), s.bareme).note === 10);
+    const identite = !!(data.troupe.theme && data.troupe.theme.trim()) && !!(data.troupe.musique && data.troupe.musique.trim());
+
+    const T = (id, icon, label, desc, value, b, a, o) => {
+      const tiers = [{ name: "Bronze", v: b }, { name: "Argent", v: a }, { name: "Or", v: o }];
+      const tier = value >= o ? 3 : value >= a ? 2 : value >= b ? 1 : 0;
+      return { id, icon, label, type: "tier", desc, value, tiers, tier, next: tier < 3 ? tiers[tier].v : null, color: TIER_COLORS[tier], tierLabel: TIER_NAMES[tier], dim: tier === 0 };
+    };
+    const B = (id, icon, label, desc, got) => ({ id, icon, label, type: "binary", desc, got, color: got ? C.gold : TIER_COLORS[0], tierLabel: "", dim: !got });
+
+    return [
+      B("premiere", Star, "1ère validation", "Faire valider ta toute première figure (validée par l’enseignant, 4 règles respectées).", vCount >= 1),
+      T("collection", Layers, "Collectionneur", "Total de figures validées sur toutes les séances.", vCount, 10, 20, 30),
+      T("tresor", Gem, "Trésor de difficulté", "Points de difficulté cumulés (somme des points des figures validées).", diffPoints, 10, 20, 35),
+      T("duos", Users, "Duos confirmés", "Figures validées en duos (séances 1 et 2 cumulées).", duos, 4, 8, 12),
+      T("trios", Users, "Trios confirmés", "Figures validées en trios (séances 3 et 4 cumulées).", trios, 4, 8, 12),
+      T("quatuors", Users, "Quatuors confirmés", "Figures validées en quatuors (séances 5 et 6 cumulées).", quat, 4, 8, 12),
+      B("polyvalent", Repeat, "Polyvalent", "Valider au moins une figure dans chacune des 4 familles (redressé, horizontal, ATR, équerre).", famCount >= 4),
+      B("niveauD", Trophy, "Niveau D débloqué", "Valider au moins une figure de niveau D.", hasD),
+      B("diffmax", Flame, "Difficulté max", "Valider une figure de niveau D dans chaque effectif : duo, trio et quatuor.", diffMax),
+      T("concentration", Target, "Concentration maximale", "Concentration cumulée sur l’ensemble des séances (max 10).", conc, 4, 5, 6),
+      B("choregraphe", Sparkles, "Chorégraphe", "Choisir les 7 figures de la chorégraphie finale.", chosen >= 7),
+      T("ambition", Crown, "Ambition", "Difficulté cumulée de la chorégraphie (somme des niveaux des 7 figures).", choreoDiff, 6, 8, 12),
+      T("voltigeur", Zap, "Voltigeur", "Éléments dynamiques dans la chorégraphie (figures + liaisons dynamiques).", dynamics, 1, 3, 5),
+      T("liaisons", Link, "Liaisons soignées", "Liaisons décrites dans la chorégraphie (il y en a 6 au maximum).", liaisons, 2, 4, 6),
+      T("espace", Move, "Maître de l’espace", "Zones du praticable occupées dans la chorégraphie (max 12).", espace, 4, 8, 10),
+      B("repas", Utensils, "Entrée – plat – dessert", "La chorégraphie possède une entrée, les 7 figures et une sortie.", fullChoreo),
+      B("seance1", ClipboardCheck, "Première séance", "Faire noter et valider la première séance.", S(1).note != null),
+      B("carton", Medal, "Carton plein", "Valider les 8 figures d’une même séance.", carton),
+      B("parfaite", Award, "Séance parfaite", "Obtenir une séance à 10/10.", parfaite),
+      B("identite", Palette, "Identité", "Renseigner le thème et la musique de la troupe.", identite),
+      B("scene", Flag, "Prêt pour la scène", "L’enseignant verrouille l’évaluation finale.", data.finale.locked),
+    ];
+}
+
+/* Nombre de badges obtenus (au moins Bronze pour les badges à paliers). */
+function badgesEarnedCount(badges) {
+  return badges.filter((b) => (b.type === "tier" ? b.tier >= 1 : b.got)).length;
+}
+
+
 function App({ storageKey, seed, groupCode, onExit, onMeta, onSetCode, onDelete, startProf }) {
   const [data, setData] = useState(defaultData);
   const [loaded, setLoaded] = useState(false);
@@ -307,62 +371,7 @@ function App({ storageKey, seed, groupCode, onExit, onMeta, onSetCode, onDelete,
   }, [data.sessions]);
 
   /* --- badges --- */
-  const badges = useMemo(() => {
-    const S = (id) => data.sessions[id];
-    const figOk = (f) => f.validated && f.rules.every(Boolean);
-    const allFigs = FIG_SESSIONS.flatMap((s) => S(s.id).figures);
-    const vCount = allFigs.filter(figOk).length;
-    const hasD = allFigs.some((f) => f.level === "D" && figOk(f));
-    const diffPoints = FIG_SESSIONS.reduce((a, s) => a + sessionScore(S(s.id), s.bareme).figs, 0);
-    const duos = sessionValidatedCount(S(1)) + sessionValidatedCount(S(2));
-    const trios = sessionValidatedCount(S(3)) + sessionValidatedCount(S(4));
-    const quat = sessionValidatedCount(S(5)) + sessionValidatedCount(S(6));
-    const famCount = new Set(allFigs.filter(figOk).map((f) => f.family)).size;
-    const dIn = (ids) => ids.some((id) => S(id).figures.some((f) => f.level === "D" && figOk(f)));
-    const diffMax = dIn([1, 2]) && dIn([3, 4]) && dIn([5, 6]);
-    const conc = FIG_SESSIONS.reduce((a, s) => a + (S(s.id).concentration || 0), 0);
-    const ch = data.choreo;
-    const chosen = ch.figures.filter((f) => f.repA).length;
-    const choreoDiff = Math.round(ch.figures.reduce((a, f) => a + (BAREME_CHOREO[f.level] || 0), 0) * 100) / 100;
-    const dynamics = ch.figures.filter((f) => f.dynamic).length + ch.liaisons.filter((l) => l.dynamic).length;
-    const liaisons = ch.liaisons.filter((l) => l.desc && l.desc.trim()).length;
-    const espace = ch.espace.filter(Boolean).length;
-    const fullChoreo = !!(ch.entree && ch.entree.trim()) && !!(ch.sortie && ch.sortie.trim()) && chosen >= 7;
-    const carton = FIG_SESSIONS.some((s) => sessionValidatedCount(S(s.id)) === 8);
-    const parfaite = FIG_SESSIONS.some((s) => sessionScore(S(s.id), s.bareme).note === 10);
-    const identite = !!(data.troupe.theme && data.troupe.theme.trim()) && !!(data.troupe.musique && data.troupe.musique.trim());
-
-    const T = (id, icon, label, desc, value, b, a, o) => {
-      const tiers = [{ name: "Bronze", v: b }, { name: "Argent", v: a }, { name: "Or", v: o }];
-      const tier = value >= o ? 3 : value >= a ? 2 : value >= b ? 1 : 0;
-      return { id, icon, label, type: "tier", desc, value, tiers, tier, next: tier < 3 ? tiers[tier].v : null, color: TIER_COLORS[tier], tierLabel: TIER_NAMES[tier], dim: tier === 0 };
-    };
-    const B = (id, icon, label, desc, got) => ({ id, icon, label, type: "binary", desc, got, color: got ? C.gold : TIER_COLORS[0], tierLabel: "", dim: !got });
-
-    return [
-      B("premiere", Star, "1ère validation", "Faire valider ta toute première figure (validée par l’enseignant, 4 règles respectées).", vCount >= 1),
-      T("collection", Layers, "Collectionneur", "Total de figures validées sur toutes les séances.", vCount, 10, 20, 30),
-      T("tresor", Gem, "Trésor de difficulté", "Points de difficulté cumulés (somme des points des figures validées).", diffPoints, 10, 20, 35),
-      T("duos", Users, "Duos confirmés", "Figures validées en duos (séances 1 et 2 cumulées).", duos, 4, 8, 12),
-      T("trios", Users, "Trios confirmés", "Figures validées en trios (séances 3 et 4 cumulées).", trios, 4, 8, 12),
-      T("quatuors", Users, "Quatuors confirmés", "Figures validées en quatuors (séances 5 et 6 cumulées).", quat, 4, 8, 12),
-      B("polyvalent", Repeat, "Polyvalent", "Valider au moins une figure dans chacune des 4 familles (redressé, horizontal, ATR, équerre).", famCount >= 4),
-      B("niveauD", Trophy, "Niveau D débloqué", "Valider au moins une figure de niveau D.", hasD),
-      B("diffmax", Flame, "Difficulté max", "Valider une figure de niveau D dans chaque effectif : duo, trio et quatuor.", diffMax),
-      T("concentration", Target, "Concentration maximale", "Concentration cumulée sur l’ensemble des séances (max 10).", conc, 4, 5, 6),
-      B("choregraphe", Sparkles, "Chorégraphe", "Choisir les 7 figures de la chorégraphie finale.", chosen >= 7),
-      T("ambition", Crown, "Ambition", "Difficulté cumulée de la chorégraphie (somme des niveaux des 7 figures).", choreoDiff, 6, 8, 12),
-      T("voltigeur", Zap, "Voltigeur", "Éléments dynamiques dans la chorégraphie (figures + liaisons dynamiques).", dynamics, 1, 3, 5),
-      T("liaisons", Link, "Liaisons soignées", "Liaisons décrites dans la chorégraphie (il y en a 6 au maximum).", liaisons, 2, 4, 6),
-      T("espace", Move, "Maître de l’espace", "Zones du praticable occupées dans la chorégraphie (max 12).", espace, 4, 8, 10),
-      B("repas", Utensils, "Entrée – plat – dessert", "La chorégraphie possède une entrée, les 7 figures et une sortie.", fullChoreo),
-      B("seance1", ClipboardCheck, "Première séance", "Faire noter et valider la première séance.", S(1).note != null),
-      B("carton", Medal, "Carton plein", "Valider les 8 figures d’une même séance.", carton),
-      B("parfaite", Award, "Séance parfaite", "Obtenir une séance à 10/10.", parfaite),
-      B("identite", Palette, "Identité", "Renseigner le thème et la musique de la troupe.", identite),
-      B("scene", Flag, "Prêt pour la scène", "L’enseignant verrouille l’évaluation finale.", data.finale.locked),
-    ];
-  }, [data]);
+  const badges = useMemo(() => computeBadges(data), [data]);
 
   const totalPoints = useMemo(() => FIG_SESSIONS.reduce((a, s) => a + sessionScore(data.sessions[s.id], s.bareme).figs, 0), [data.sessions]);
   const totalValidated = useMemo(() => FIG_SESSIONS.reduce((a, s) => a + sessionValidatedCount(data.sessions[s.id]), 0), [data.sessions]);
@@ -672,6 +681,7 @@ function ProfDashboard({ troupes, onOpen, onBack }) {
   const [rows, setRows] = useState(null); // null = chargement
   const [refreshing, setRefreshing] = useState(false);
   const [pinOpen, setPinOpen] = useState(false);
+  const [openBadges, setOpenBadges] = useState(null); // id de la troupe dont le détail des badges est déplié
   const [np1, setNp1] = useState("");
   const [np2, setNp2] = useState("");
   const [perr, setPerr] = useState("");
@@ -689,8 +699,10 @@ function ProfDashboard({ troupes, onOpen, onBack }) {
       let validated = 0;
       FIG_SESSIONS.forEach((s) => doc.sessions[s.id].figures.forEach((f) => { if (f.validated && f.rules.every(Boolean)) validated++; }));
       const choreoFill = doc.choreo.figures.filter((f) => f.level).length;
+      const allBadges = computeBadges(doc);
       out.push({
         t, empty: false, notes, validated, choreoFill,
+        badges: badgesEarnedCount(allBadges), badgesTotal: allBadges.length, badgeList: allBadges,
         theme: doc.troupe.theme, musique: doc.troupe.musique,
         locked: doc.finale.locked,
         members: doc.troupe.members.filter((m) => m.name && m.name.trim()).map((m) => m.name.trim()),
@@ -738,7 +750,7 @@ function ProfDashboard({ troupes, onOpen, onBack }) {
           </div>
         ) : (
           <div className="grid gap-3">
-            {rows.map(({ t, empty, notes, validated, choreoFill, theme, musique, locked, members }) => (
+            {rows.map(({ t, empty, notes, validated, choreoFill, badges, badgesTotal, badgeList, theme, musique, locked, members }) => (
               <div key={t.id} className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${C.line}` }}>
                 <div className="flex items-center gap-3">
                   <span className="flex items-center justify-center rounded-lg" style={{ width: 40, height: 40, background: C.soft, fontSize: 21 }}>{t.emoji}</span>
@@ -766,6 +778,23 @@ function ProfDashboard({ troupes, onOpen, onBack }) {
                     <span className="rounded-lg px-2 py-1 font-semibold" style={{ fontSize: 11.5, background: choreoFill >= 7 ? C.success : C.soft, border: `1px solid ${choreoFill >= 7 ? C.success : C.line}`, color: choreoFill >= 7 ? "#fff" : C.ink }}>
                       Choré {choreoFill}/7
                     </span>
+                    <button onClick={() => setOpenBadges(openBadges === t.id ? null : t.id)} title="Voir le détail des badges" className="rounded-lg px-2 py-1 font-semibold inline-flex items-center gap-1" style={{ fontSize: 11.5, background: openBadges === t.id ? C.accent : C.soft, border: `1px solid ${openBadges === t.id ? C.accent : C.line}`, color: openBadges === t.id ? "#fff" : C.ink, cursor: "pointer" }}>
+                      <Medal size={12} style={{ color: openBadges === t.id ? "#fff" : C.gold }} />{badges}/{badgesTotal} badges
+                      <ChevronRight size={12} style={{ transform: openBadges === t.id ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                    </button>
+                  </div>
+                )}
+                {!empty && openBadges === t.id && (
+                  <div className="fadeUp rounded-xl p-3 mt-3" style={{ background: C.soft, border: `1px solid ${C.line}` }}>
+                    <div className="flex flex-wrap gap-2 justify-start">
+                      {badgeList.map((b) => (
+                        <Badge key={b.id} {...b}
+                          titleText={`${b.desc}${b.type === "tier" ? ` — palier : ${b.tierLabel || "aucun"}` : (b.got ? " — obtenu" : " — non obtenu")}`} />
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8 }}>
+                      Badges grisés : non obtenus. Points sous le badge : paliers Bronze · Argent · Or. Survole (ou appui long) un badge pour lire sa condition.
+                    </div>
                   </div>
                 )}
               </div>
